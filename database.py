@@ -2,7 +2,7 @@ import sqlite3
 import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
-import config
+import config  # <-- أضف هذا السطر
 
 
 class Database:
@@ -10,11 +10,9 @@ class Database:
         self.db_path = db_path
 
     def _get_conn(self):
-        """Return a new SQLite connection (synchronous)."""
         return sqlite3.connect(self.db_path)
 
     def _init_sync(self):
-        """Synchronous initialization (create tables)."""
         conn = self._get_conn()
         cursor = conn.cursor()
         cursor.execute("""
@@ -53,7 +51,6 @@ class Database:
                 FOREIGN KEY (user_id) REFERENCES users(user_id)
             )
         """)
-        # إضافة الأعمدة المفقودة إذا لزم الأمر
         cursor.execute("PRAGMA table_info(sessions)")
         columns = [row[1] for row in cursor.fetchall()]
         if "locked_count" not in columns:
@@ -64,7 +61,6 @@ class Database:
         conn.close()
 
     async def init(self):
-        """Async wrapper for table creation."""
         await asyncio.to_thread(self._init_sync)
 
     # ─── Users ───
@@ -139,7 +135,11 @@ class Database:
             }
         return await asyncio.to_thread(_sync)
 
+    # ─── التعديل الأساسي: جعل الأدمن مشتركاً دائماً ───
     async def is_subscribed(self, user_id: int) -> bool:
+        # إذا كان المستخدم في قائمة الأدمن، فهو مشترك دائماً
+        if user_id in config.ADMIN_IDS:
+            return True
         sub = await self.get_active_subscription(user_id)
         return sub is not None
 
