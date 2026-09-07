@@ -2,8 +2,7 @@ import sqlite3
 import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
-import config  # <-- أضف هذا السطر
-
+import config  # استيراد config
 
 class Database:
     def __init__(self, db_path: str = config.DATABASE_PATH):
@@ -135,12 +134,25 @@ class Database:
             }
         return await asyncio.to_thread(_sync)
 
-    # ─── التعديل الأساسي: جعل الأدمن مشتركاً دائماً ───
+    # ════════════════════════════════════════════════════════
+    # 🔥 التعديل الجذري: جعل الأدمن مشتركاً دائماً بغض النظر عن أي شيء
+    # ════════════════════════════════════════════════════════
     async def is_subscribed(self, user_id: int) -> bool:
-        # إذا كان المستخدم في قائمة الأدمن، فهو مشترك دائماً
+        # طباعة للمساعدة في التتبع
+        print(f"🔍 جاري فحص المستخدم: {user_id}")
+        print(f"📋 قائمة الأدمن في config: {config.ADMIN_IDS}")
+
+        # الشرط الأول: إذا كان المعرف في قائمة الأدمن، يعتبر مشتركاً دائماً
         if user_id in config.ADMIN_IDS:
+            print("✅ تم التعرف على الأدمن! صلاحية دائمة.")
             return True
+
+        # الشرط الثاني: إذا لم يكن أدمن، نتحقق من وجود اشتراك في قاعدة البيانات
         sub = await self.get_active_subscription(user_id)
+        if sub:
+            print("✅ يوجد اشتراك نشط.")
+        else:
+            print("❌ لا يوجد اشتراك نشط.")
         return sub is not None
 
     # ─── Sessions ───
@@ -210,6 +222,5 @@ class Database:
             conn.close()
             return {"users": users, "subscriptions": subs, "sessions": sessions}
         return await asyncio.to_thread(_sync)
-
 
 db = Database()
