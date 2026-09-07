@@ -631,11 +631,9 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ─── Main ───
 def main():
-    # ─── التعديل النهائي: تهيئة قاعدة البيانات على نفس حلقة الأحداث ───
     loop = asyncio.get_event_loop()
     loop.run_until_complete(db.init())
 
-    # ─── بناء التطبيق ───
     application = Application.builder().token(config.BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", cmd_start))
