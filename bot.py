@@ -631,6 +631,11 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ─── Main ───
 def main():
+    # ─── التعديل النهائي: تهيئة قاعدة البيانات على نفس حلقة الأحداث ───
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(db.init())
+
+    # ─── بناء التطبيق ───
     application = Application.builder().token(config.BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", cmd_start))
@@ -654,9 +659,6 @@ def main():
 
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-
-    # التعديل المطلوب هنا: استخدام asyncio.run بدلاً من get_event_loop
-    asyncio.run(db.init())
 
     logger.info("Bot started polling...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
