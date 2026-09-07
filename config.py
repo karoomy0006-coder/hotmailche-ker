@@ -2,7 +2,9 @@ import os
 from pathlib import Path
 
 BOT_TOKEN = "8872535321:AAHltagg4XJv-86JJNhdK5Jxz_7TTZ54fdA"
-ADMIN_IDS = [8703458182]
+
+# ⚠️ تأكد أن هذا الرقم هو معرفك الصحيح (بدون أي فراغات أو علامات)
+ADMIN_IDS = [8703458182]  # <- إذا لم يعمل، جرب: ADMIN_IDS = [8703458182, 0] كحل بديل
 
 BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data"
