@@ -29,7 +29,6 @@ import config
 from i18n import t
 from database import db
 from proxy_manager import ProxyManager
-# ─── استبدال المحرك القديم بالمحرك الجديد لـ email:pass ───
 from outlook_checker import BulkChecker
 
 # ─── Logging ───
@@ -44,7 +43,6 @@ user_data_store: Dict[int, dict] = {}
 
 # ─── Helpers ───
 def _ud(update: Update) -> int:
-    """Shorthand for user_id."""
     return update.effective_user.id
 
 def render_progress_bar(percent: float, length: int = 18) -> str:
@@ -65,7 +63,7 @@ def lang_keyboard():
 def main_menu_keyboard(lang: str):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(t("btn_upload_proxies", lang), callback_data="menu_proxies"),
-         InlineKeyboardButton(t("btn_upload_combos", lang), callback_data="menu_emails")],  # زر رفع القائمة
+         InlineKeyboardButton(t("btn_upload_combos", lang), callback_data="menu_emails")],
         [InlineKeyboardButton(t("btn_start_check", lang), callback_data="menu_audit"),
          InlineKeyboardButton(t("btn_download_results", lang), callback_data="menu_download")],
         [InlineKeyboardButton(t("btn_subscription", lang), callback_data="menu_sub"),
@@ -151,12 +149,12 @@ async def cb_menu_emails(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = await db.get_language(_ud(update))
     user_data_store[_ud(update)] = {"state": "waiting_emails"}
     await query.edit_message_text(
-        t("upload_emails_prompt", lang),  # نص يشير إلى رفع أزواج email:pass
+        t("upload_emails_prompt", lang),
         reply_markup=back_keyboard(lang),
         parse_mode="HTML",
     )
 
-# ─── Document Upload Handler (المعدل) ───
+# ─── Document Upload Handler ───
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = _ud(update)
     lang = await db.get_language(uid)
@@ -191,7 +189,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_data_store[uid]["state"] = "idle"
 
     elif state == "waiting_emails":
-        # ─── التعديل الجوهري: قراءة أزواج email:pass ───
         combos = []
         for line in text.splitlines():
             line = line.strip()
@@ -200,7 +197,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parts = line.split(":", 1)
             if len(parts) == 2 and "@" in parts[0]:
                 combos.append((parts[0].strip(), parts[1].strip()))
-        # إزالة التكرار (نحتفظ بأول ظهور لكل بريد)
         seen = set()
         unique_combos = []
         for email, pwd in combos:
@@ -315,7 +311,7 @@ async def cb_pay_stars(update: Update, context: ContextTypes.DEFAULT_TYPE):
     title = f"Premium — {tier['name_en']}"
     description = f"Unlock Outlook checking for {tier['name_en']}."
     payload = f"stars_{tier_key}_{uid}_{int(time.time())}"
-    currency = "XTR"  # Telegram Stars
+    currency = "XTR"
     prices = [LabeledPrice(label=tier["name_en"], amount=tier["stars"])]
 
     await context.bot.send_invoice(
@@ -323,7 +319,7 @@ async def cb_pay_stars(update: Update, context: ContextTypes.DEFAULT_TYPE):
         title=title,
         description=description,
         payload=payload,
-        provider_token="",  # Not needed for Stars
+        provider_token="",
         currency=currency,
         prices=prices,
         start_parameter="premium_stars",
@@ -453,7 +449,7 @@ async def _monitor_usdt_deposit(uid: int, context: ContextTypes.DEFAULT_TYPE):
     )
     user_data_store[uid].pop("pending_usdt", None)
 
-# ─── Audit / Check Engine (المعدل) ───
+# ─── Audit / Check Engine ───
 async def cb_menu_audit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -468,7 +464,6 @@ async def cb_menu_audit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ─── الحصول على قائمة الأزواج المخزنة ───
     combos = user_data_store.get(uid, {}).get("combos", [])
     if not combos:
         await query.edit_message_text(
@@ -502,14 +497,13 @@ async def cb_menu_audit(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def _run_audit(
     uid: int,
     lang: str,
-    combos: list,   # قائمة من (email, password)
+    combos: list,
     pm: ProxyManager,
     concurrency: int,
     progress_msg,
     session_id: int,
     context: ContextTypes.DEFAULT_TYPE,
 ):
-    """Background task that runs the bulk checker and updates Telegram progress."""
     start_time = time.time()
     last_edit = 0
 
@@ -552,17 +546,14 @@ async def _run_audit(
 
     elapsed = time.time() - start_time
 
-    # Count results
     valid = sum(1 for r in results if r["status"] == "Valid")
     invalid = sum(1 for r in results if r["status"] == "Invalid")
     locked = sum(1 for r in results if r["status"] == "Locked/2FA")
     retry = sum(1 for r in results if r["status"] == "Retry")
     timeout = sum(1 for r in results if r["status"] == "Timeout")
 
-    # تحديث قاعدة البيانات (تأكد من إضافة الأعمدة الجديدة في database.py)
     await db.update_session_counts(session_id, valid, invalid, locked, retry, timeout)
 
-    # كتابة ملف النتائج الكامل
     result_path = config.RESULTS_DIR / f"audit_{uid}_{session_id}.txt"
     with open(result_path, "w", encoding="utf-8") as f:
         f.write("# Outlook Account Checker Results\n")
@@ -574,7 +565,6 @@ async def _run_audit(
 
     await db.complete_session(session_id, str(result_path))
 
-    # رسالة الإكمال
     await progress_msg.edit_text(
         t("audit_complete", lang,
           total=len(results),
@@ -590,7 +580,6 @@ async def _run_audit(
     if config.STICKER_SUCCESS:
         await context.bot.send_sticker(uid, config.STICKER_SUCCESS)
 
-    # إرسال ملف النتائج الصالحة (email:pass)
     valid_path = config.RESULTS_DIR / f"valid_{uid}_{session_id}.txt"
     with open(valid_path, "w", encoding="utf-8") as f:
         for r in results:
@@ -644,11 +633,9 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     application = Application.builder().token(config.BOT_TOKEN).build()
 
-    # Commands
     application.add_handler(CommandHandler("start", cmd_start))
     application.add_handler(CommandHandler("stats", cmd_stats))
 
-    # Callbacks
     application.add_handler(CallbackQueryHandler(cb_lang, pattern=r"^lang_"))
     application.add_handler(CallbackQueryHandler(cb_menu_main, pattern=r"^menu_main$"))
     application.add_handler(CallbackQueryHandler(cb_menu_proxies, pattern=r"^menu_proxies$"))
@@ -662,16 +649,14 @@ def main():
     application.add_handler(CallbackQueryHandler(cb_pay_stars, pattern=r"^pay_stars_"))
     application.add_handler(CallbackQueryHandler(cb_pay_usdt, pattern=r"^pay_usdt_"))
 
-    # Payments
     application.add_handler(PreCheckoutQueryHandler(precheckout_handler))
     application.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler))
 
-    # Documents & text
     application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    # Init DB
-    asyncio.get_event_loop().run_until_complete(db.init())
+    # التعديل المطلوب هنا: استخدام asyncio.run بدلاً من get_event_loop
+    asyncio.run(db.init())
 
     logger.info("Bot started polling...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
