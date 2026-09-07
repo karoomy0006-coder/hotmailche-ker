@@ -2,7 +2,8 @@ import sqlite3
 import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
-import config  # استيراد config
+import config
+
 
 class Database:
     def __init__(self, db_path: str = config.DATABASE_PATH):
@@ -134,26 +135,13 @@ class Database:
             }
         return await asyncio.to_thread(_sync)
 
-    # ════════════════════════════════════════════════════════
-    # 🔥 التعديل الجذري: جعل الأدمن مشتركاً دائماً بغض النظر عن أي شيء
-    # ════════════════════════════════════════════════════════
+    # ════════════════════════════════════════════════════════════════
+    # 🔥 التعديل الجذري: جميع المستخدمين مشتركون (للتجربة)
+    # ════════════════════════════════════════════════════════════════
     async def is_subscribed(self, user_id: int) -> bool:
-        # طباعة للمساعدة في التتبع
-        print(f"🔍 جاري فحص المستخدم: {user_id}")
-        print(f"📋 قائمة الأدمن في config: {config.ADMIN_IDS}")
-
-        # الشرط الأول: إذا كان المعرف في قائمة الأدمن، يعتبر مشتركاً دائماً
-        if user_id in config.ADMIN_IDS:
-            print("✅ تم التعرف على الأدمن! صلاحية دائمة.")
-            return True
-
-        # الشرط الثاني: إذا لم يكن أدمن، نتحقق من وجود اشتراك في قاعدة البيانات
-        sub = await self.get_active_subscription(user_id)
-        if sub:
-            print("✅ يوجد اشتراك نشط.")
-        else:
-            print("❌ لا يوجد اشتراك نشط.")
-        return sub is not None
+        # ✅ جميع المستخدمين يعتبرون مشتركين (سيتم تعديله لاحقاً لتقييد الأدمن فقط)
+        print(f"✅ صلاحية مؤقتة للجميع - المستخدم: {user_id}")
+        return True
 
     # ─── Sessions ───
     async def create_session(self, user_id: int, total_emails: int) -> int:
@@ -222,5 +210,6 @@ class Database:
             conn.close()
             return {"users": users, "subscriptions": subs, "sessions": sessions}
         return await asyncio.to_thread(_sync)
+
 
 db = Database()
