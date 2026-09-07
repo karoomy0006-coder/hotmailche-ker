@@ -1,6 +1,8 @@
 """
 Email Auditor Pro — Async SQLite Database Layer
+Supports users, subscriptions, and audit sessions for email:pass checking.
 """
+
 import aiosqlite
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
@@ -15,8 +17,9 @@ class Database:
         return await aiosqlite.connect(self.db_path)
 
     async def init(self):
-        """Create tables if they do not exist."""
+        """Create tables and add missing columns if they don't exist."""
         async with await self._connect() as db:
+            # Users table
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS users (
                     user_id INTEGER PRIMARY KEY,
@@ -25,6 +28,7 @@ class Database:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            # Subscriptions table
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS subscriptions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -37,6 +41,7 @@ class Database:
                     FOREIGN KEY (user_id) REFERENCES users(user_id)
                 )
             """)
+            # Sessions table (audit/check sessions)
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS sessions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -44,7 +49,8 @@ class Database:
                     total_emails INTEGER DEFAULT 0,
                     valid_count INTEGER DEFAULT 0,
                     invalid_count INTEGER DEFAULT 0,
-                    grey_count INTEGER DEFAULT 0,
+                    locked_count INTEGER DEFAULT 0,
+                    retry_count INTEGER DEFAULT 0,
                     timeout_count INTEGER DEFAULT 0,
                     started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     completed_at TIMESTAMP,
@@ -52,6 +58,16 @@ class Database:
                     FOREIGN KEY (user_id) REFERENCES users(user_id)
                 )
             """)
+
+            # --- Add new columns if they are missing (for existing databases) ---
+            # Check if locked_count exists
+            cursor = await db.execute("PRAGMA table_info(sessions)")
+            columns = [row[1] for row in await cursor.fetchall()]
+            if "locked_count" not in columns:
+                await db.execute("ALTER TABLE sessions ADD COLUMN locked_count INTEGER DEFAULT 0")
+            if "retry_count" not in columns:
+                await db.execute("ALTER TABLE sessions ADD COLUMN retry_count INTEGER DEFAULT 0")
+
             await db.commit()
 
     # ─── Users ───
@@ -124,7 +140,7 @@ class Database:
     async def is_subscribed(self, user_id: int) -> bool:
         return await self.get_active_subscription(user_id) is not None
 
-    # ─── Sessions ───
+    # ─── Sessions (Audit/Check) ───
     async def create_session(self, user_id: int, total_emails: int) -> int:
         async with await self._connect() as db:
             cursor = await db.execute(
@@ -139,17 +155,19 @@ class Database:
         session_id: int,
         valid: int,
         invalid: int,
-        grey: int,
+        locked: int,
+        retry: int,
         timeout_count: int,
     ):
+        """Update the counts for a session. Must match the columns."""
         async with await self._connect() as db:
             await db.execute(
                 """
                 UPDATE sessions
-                SET valid_count = ?, invalid_count = ?, grey_count = ?, timeout_count = ?
+                SET valid_count = ?, invalid_count = ?, locked_count = ?, retry_count = ?, timeout_count = ?
                 WHERE id = ?
                 """,
-                (valid, invalid, grey, timeout_count, session_id),
+                (valid, invalid, locked, retry, timeout_count, session_id),
             )
             await db.commit()
 
