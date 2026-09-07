@@ -1,16 +1,20 @@
 """
 Email Auditor Pro — Configuration Module
-Mandatory Disclaimer: This tool is intended solely for internal email list hygiene
-and auditing by enterprises that have obtained explicit written consent from the
-owners of the target domains. It must not be used for sending unsolicited emails
-or for any unauthorised access to accounts.
+Outlook/Hotmail Account Checker (email:pass)
+
+Mandatory Disclaimer:
+This tool is intended solely for educational and security testing purposes,
+with explicit written consent from account owners. Unauthorised access to
+accounts is illegal and strictly prohibited. Use at your own risk.
 """
 import os
 from pathlib import Path
 
 # ─── Bot Core ───
-BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
-ADMIN_IDS = list(map(int, os.getenv("ADMIN_IDS", "123456789").split(",")))
+BOT_TOKEN = "8872535321:AAHltagg4XJv-86JJNhdK5Jxz_7TTZ54fdA"
+
+# ⚠️ ADMIN_IDS يجب أن تكون قائمة (List) من الأرقام، وليس نصاً
+ADMIN_IDS = [8703458182]   # ضع معرفك هنا (رقم فقط)
 
 # ─── Paths ───
 BASE_DIR = Path(__file__).parent
@@ -26,28 +30,25 @@ MAX_CONCURRENT_CHECKS = int(os.getenv("MAX_CONCURRENT_CHECKS", "500"))
 SMTP_TIMEOUT = int(os.getenv("SMTP_TIMEOUT", "10"))
 PROXY_CHECK_TIMEOUT = int(os.getenv("PROXY_CHECK_TIMEOUT", "5"))
 DEFAULT_MAIL_FROM = os.getenv("DEFAULT_MAIL_FROM", "verify@auditor.bot")
-PROGRESS_UPDATE_INTERVAL = int(os.getenv("PROGRESS_UPDATE_INTERVAL", "3"))  # seconds
+PROGRESS_UPDATE_INTERVAL = int(os.getenv("PROGRESS_UPDATE_INTERVAL", "3"))
 
 # ─── Proxy Test Target ───
-# We validate proxies by opening a TCP connection to a well-known mail server.
 PROXY_VALIDATE_HOST = os.getenv("PROXY_VALIDATE_HOST", "gmail-smtp-in.l.google.com")
 PROXY_VALIDATE_PORT = int(os.getenv("PROXY_VALIDATE_PORT", "25"))
 
 # ─── Payments ───
-# Telegram Stars use currency="XTR" — no provider token required.
 TELEGRAM_PAYMENT_PROVIDER_TOKEN = os.getenv("PAYMENT_PROVIDER_TOKEN", "")
 
-# USDT TRC20 — configure your TronGrid API key for deposit listening
+# USDT TRC20 – العقد الصحيح لـ USDT على شبكة TRON
 TRONGRID_API_KEY = os.getenv("TRONGRID_API_KEY", "")
-USDT_TRC20_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"  # Official USDT contract
+USDT_TRC20_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"   # العقد الرسمي
 USDT_TRC20_DEPOSIT_ADDRESS = os.getenv("USDT_TRC20_DEPOSIT_ADDRESS", "YOUR_TRON_ADDRESS")
 
-# Stripe / YooKassa webhooks (optional)
+# Stripe / YooKassa (اختياري)
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 YOOKASSA_WEBHOOK_SECRET = os.getenv("YOOKASSA_WEBHOOK_SECRET", "")
 
 # ─── Subscription Tiers ───
-# Prices: Stars are integer amounts. USDT prices are float.
 TIERS = {
     "3days": {
         "name_en": "3 Days",
@@ -86,14 +87,15 @@ TIERS = {
     },
 }
 
-# ─── Stickers (replace with your premium sticker file_ids) ───
-STICKER_PROCESSING = os.getenv("STICKER_PROCESSING", "")
-STICKER_SUCCESS = os.getenv("STICKER_SUCCESS", "")
-STICKER_ERROR = os.getenv("STICKER_ERROR", "")
+# ─── Stickers ───
+# 🎯 اتركها فارغة إذا لم تحصل على المعرفات – البوت سيتخطاها تلقائياً
+STICKER_PROCESSING = ""   # املأها عندما تحصل على المعرف
+STICKER_SUCCESS = ""      # املأها عندما تحصل على المعرف
+STICKER_ERROR = ""        # املأها عندما تحصل على المعرف
 
 # ─── Legal ───
 DISCLAIMER = (
-    "This tool is intended solely for internal email list hygiene and auditing by enterprises "
-    "that have obtained explicit written consent from the owners of the target domains. "
-    "It must not be used for sending unsolicited emails or for any unauthorised access to accounts."
+    "This tool is intended solely for educational and security testing purposes, "
+    "with explicit written consent from account owners. Unauthorised access to "
+    "accounts is illegal and strictly prohibited. Use at your own risk."
 )
