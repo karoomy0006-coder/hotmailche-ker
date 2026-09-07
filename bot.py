@@ -1,10 +1,11 @@
 """
 Email Auditor Pro — Telegram Bot (python-telegram-bot v20+)
+Outlook/Hotmail Account Checker (email:pass)
 
 Mandatory Disclaimer:
-This tool is intended solely for internal email list hygiene and auditing by enterprises
-that have obtained explicit written consent from the owners of the target domains.
-It must not be used for sending unsolicited emails or for any unauthorised access to accounts.
+This tool is intended solely for educational and security testing purposes,
+with explicit written consent from account owners. Unauthorised access to
+accounts is illegal and strictly prohibited. Use at your own risk.
 """
 import os
 import asyncio
@@ -28,7 +29,8 @@ import config
 from i18n import t
 from database import db
 from proxy_manager import ProxyManager
-from smtp_engine import BulkAuditor
+# ─── استبدال المحرك القديم بالمحرك الجديد لـ email:pass ───
+from outlook_checker import BulkChecker
 
 # ─── Logging ───
 logging.basicConfig(
@@ -38,7 +40,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ─── In-memory user state ───
-# Tracks per-user ephemeral data (uploads, pending payments, etc.)
 user_data_store: Dict[int, dict] = {}
 
 # ─── Helpers ───
@@ -46,22 +47,13 @@ def _ud(update: Update) -> int:
     """Shorthand for user_id."""
     return update.effective_user.id
 
-
-def _lang(update: Update) -> str:
-    """Fetch user language from DB or default to en."""
-    # Fire-and-forget sync wrapper not possible; we pass lang explicitly in async handlers
-    return "en"
-
-
 def render_progress_bar(percent: float, length: int = 18) -> str:
     filled = int(length * percent / 100)
     bar = "█" * filled + "░" * (length - filled)
     return f"[{bar}]"
 
-
 def fmt_seconds(seconds: float) -> str:
     return str(timedelta(seconds=int(seconds)))
-
 
 # ─── Keyboards ───
 def lang_keyboard():
@@ -70,12 +62,11 @@ def lang_keyboard():
          InlineKeyboardButton("🇸🇦 العربية", callback_data="lang_ar")]
     ])
 
-
 def main_menu_keyboard(lang: str):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(t("btn_upload_proxies", lang), callback_data="menu_proxies"),
-         InlineKeyboardButton(t("btn_upload_emails", lang), callback_data="menu_emails")],
-        [InlineKeyboardButton(t("btn_start_audit", lang), callback_data="menu_audit"),
+         InlineKeyboardButton(t("btn_upload_combos", lang), callback_data="menu_emails")],  # زر رفع القائمة
+        [InlineKeyboardButton(t("btn_start_check", lang), callback_data="menu_audit"),
          InlineKeyboardButton(t("btn_download_results", lang), callback_data="menu_download")],
         [InlineKeyboardButton(t("btn_subscription", lang), callback_data="menu_sub"),
          InlineKeyboardButton(t("btn_buy_premium", lang), callback_data="menu_buy")],
@@ -83,12 +74,10 @@ def main_menu_keyboard(lang: str):
          InlineKeyboardButton(t("btn_language", lang), callback_data="menu_lang")],
     ])
 
-
 def back_keyboard(lang: str, data: str = "menu_main"):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(t("btn_back", lang), callback_data=data)]
     ])
-
 
 def tiers_keyboard(lang: str):
     rows = []
@@ -99,14 +88,12 @@ def tiers_keyboard(lang: str):
     rows.append([InlineKeyboardButton(t("btn_back", lang), callback_data="menu_main")])
     return InlineKeyboardMarkup(rows)
 
-
 def payment_keyboard(lang: str, tier_key: str):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("⭐ Telegram Stars", callback_data=f"pay_stars_{tier_key}")],
         [InlineKeyboardButton("💎 USDT (TRC20)", callback_data=f"pay_usdt_{tier_key}")],
         [InlineKeyboardButton(t("btn_back", lang), callback_data="menu_buy")],
     ])
-
 
 # ─── /start ───
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -117,7 +104,6 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=lang_keyboard(),
         parse_mode="HTML",
     )
-
 
 # ─── Language selection ───
 async def cb_lang(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -137,7 +123,6 @@ async def cb_lang(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML",
     )
 
-
 # ─── Main Menu Router ───
 async def cb_menu_main(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -148,7 +133,6 @@ async def cb_menu_main(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=main_menu_keyboard(lang),
         parse_mode="HTML",
     )
-
 
 async def cb_menu_proxies(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -161,20 +145,18 @@ async def cb_menu_proxies(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML",
     )
 
-
 async def cb_menu_emails(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     lang = await db.get_language(_ud(update))
     user_data_store[_ud(update)] = {"state": "waiting_emails"}
     await query.edit_message_text(
-        t("upload_emails_prompt", lang),
+        t("upload_emails_prompt", lang),  # نص يشير إلى رفع أزواج email:pass
         reply_markup=back_keyboard(lang),
         parse_mode="HTML",
     )
 
-
-# ─── Document Upload Handler ───
+# ─── Document Upload Handler (المعدل) ───
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = _ud(update)
     lang = await db.get_language(uid)
@@ -195,7 +177,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             t("proxies_uploaded", lang, count=count),
             parse_mode="HTML",
         )
-        # Validate in background so Telegram doesn't timeout
         async def _validate():
             await pm.validate_all()
             user_data_store[uid]["proxy_manager"] = pm
@@ -210,12 +191,26 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_data_store[uid]["state"] = "idle"
 
     elif state == "waiting_emails":
-        emails = [line.strip() for line in text.splitlines() if "@" in line]
-        emails = list(dict.fromkeys(emails))  # dedupe preserving order
-        user_data_store[uid]["emails"] = emails
+        # ─── التعديل الجوهري: قراءة أزواج email:pass ───
+        combos = []
+        for line in text.splitlines():
+            line = line.strip()
+            if ":" not in line:
+                continue
+            parts = line.split(":", 1)
+            if len(parts) == 2 and "@" in parts[0]:
+                combos.append((parts[0].strip(), parts[1].strip()))
+        # إزالة التكرار (نحتفظ بأول ظهور لكل بريد)
+        seen = set()
+        unique_combos = []
+        for email, pwd in combos:
+            if email not in seen:
+                seen.add(email)
+                unique_combos.append((email, pwd))
+        user_data_store[uid]["combos"] = unique_combos
         user_data_store[uid]["state"] = "idle"
         await update.message.reply_text(
-            t("emails_uploaded", lang, count=len(emails)),
+            t("emails_uploaded", lang, count=len(unique_combos)),
             reply_markup=back_keyboard(lang),
             parse_mode="HTML",
         )
@@ -224,7 +219,6 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     else:
         await update.message.reply_text(t("error_generic", lang))
-
 
 # ─── Concurrency ───
 async def cb_menu_concurrency(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -237,7 +231,6 @@ async def cb_menu_concurrency(update: Update, context: ContextTypes.DEFAULT_TYPE
         reply_markup=back_keyboard(lang),
         parse_mode="HTML",
     )
-
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = _ud(update)
@@ -258,7 +251,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except ValueError:
             await update.message.reply_text("❌ Invalid number.")
         return
-
 
 # ─── Subscription ───
 async def cb_menu_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -287,7 +279,6 @@ async def cb_menu_sub(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML",
         )
 
-
 # ─── Buy Premium ───
 async def cb_menu_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -298,7 +289,6 @@ async def cb_menu_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=tiers_keyboard(lang),
         parse_mode="HTML",
     )
-
 
 async def cb_tier_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -313,7 +303,6 @@ async def cb_tier_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML",
     )
 
-
 # ─── Telegram Stars Payment ───
 async def cb_pay_stars(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -324,7 +313,7 @@ async def cb_pay_stars(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tier = config.TIERS[tier_key]
 
     title = f"Premium — {tier['name_en']}"
-    description = f"Unlock email auditing for {tier['name_en']}."
+    description = f"Unlock Outlook checking for {tier['name_en']}."
     payload = f"stars_{tier_key}_{uid}_{int(time.time())}"
     currency = "XTR"  # Telegram Stars
     prices = [LabeledPrice(label=tier["name_en"], amount=tier["stars"])]
@@ -340,15 +329,11 @@ async def cb_pay_stars(update: Update, context: ContextTypes.DEFAULT_TYPE):
         start_parameter="premium_stars",
     )
 
-
 async def precheckout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Approve all pre-checkout queries (Stars)."""
     query = update.pre_checkout_query
     await query.answer(ok=True)
 
-
 async def successful_payment_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Grant subscription after successful Stars payment."""
     uid = _ud(update)
     lang = await db.get_language(uid)
     payload = update.message.successful_payment.invoice_payload
@@ -372,7 +357,6 @@ async def successful_payment_handler(update: Update, context: ContextTypes.DEFAU
     except Exception as exc:
         logger.error(f"Payment post-process error: {exc}")
         await update.message.reply_text(t("error_generic", lang))
-
 
 # ─── USDT TRC20 Payment ───
 async def cb_pay_usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -401,12 +385,9 @@ async def cb_pay_usdt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML",
     )
 
-    # Start background monitor
     asyncio.create_task(_monitor_usdt_deposit(uid, context))
 
-
 async def _monitor_usdt_deposit(uid: int, context: ContextTypes.DEFAULT_TYPE):
-    """Poll TronGrid for USDT deposit (simplified)."""
     pending = user_data_store.get(uid, {}).get("pending_usdt")
     if not pending:
         return
@@ -424,7 +405,6 @@ async def _monitor_usdt_deposit(uid: int, context: ContextTypes.DEFAULT_TYPE):
         f"?limit=20&contract_address={config.USDT_TRC20_CONTRACT}"
     )
 
-    # Poll for up to 30 minutes
     for _ in range(60):
         await asyncio.sleep(30)
         try:
@@ -436,16 +416,14 @@ async def _monitor_usdt_deposit(uid: int, context: ContextTypes.DEFAULT_TYPE):
                     data = await resp.json()
                     txs = data.get("data", [])
                     for tx in txs:
-                        # USDT has 6 decimals
                         value = int(tx.get("value", 0)) / 1_000_000
                         to_addr = tx.get("to", "")
                         tx_time = tx.get("block_timestamp", 0) / 1000
                         if (
                             to_addr.lower() == config.USDT_TRC20_DEPOSIT_ADDRESS.lower()
-                            and value >= amount * 0.99  # allow tiny slippage
+                            and value >= amount * 0.99
                             and tx_time >= started - 60
                         ):
-                            # Grant subscription
                             tier = config.TIERS[tier_key]
                             await db.add_subscription(
                                 user_id=uid,
@@ -469,22 +447,19 @@ async def _monitor_usdt_deposit(uid: int, context: ContextTypes.DEFAULT_TYPE):
         except Exception as exc:
             logger.warning(f"USDT poll error for {uid}: {exc}")
 
-    # Expired
     await context.bot.send_message(
         uid,
         "⏳ USDT deposit window expired. If you already sent funds, contact support.",
     )
     user_data_store[uid].pop("pending_usdt", None)
 
-
-# ─── Audit Engine ───
+# ─── Audit / Check Engine (المعدل) ───
 async def cb_menu_audit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     uid = _ud(update)
     lang = await db.get_language(uid)
 
-    # Permission check
     if not await db.is_subscribed(uid):
         await query.edit_message_text(
             t("no_subscription", lang),
@@ -493,8 +468,9 @@ async def cb_menu_audit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    emails = user_data_store.get(uid, {}).get("emails", [])
-    if not emails:
+    # ─── الحصول على قائمة الأزواج المخزنة ───
+    combos = user_data_store.get(uid, {}).get("combos", [])
+    if not combos:
         await query.edit_message_text(
             t("no_emails_warning", lang),
             reply_markup=back_keyboard(lang),
@@ -503,44 +479,39 @@ async def cb_menu_audit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     pm = user_data_store.get(uid, {}).get("proxy_manager")
-    if pm is None:
-        pm = ProxyManager()  # empty
+    if pm is None or pm.is_empty():
+        pm = ProxyManager()
         await query.message.reply_text(t("no_proxies_warning", lang))
 
     concurrency = user_data_store.get(uid, {}).get("concurrency", config.MAX_CONCURRENT_CHECKS)
 
-    # Create DB session
-    session_id = await db.create_session(uid, len(emails))
+    session_id = await db.create_session(uid, len(combos))
 
-    # Progress message
     progress_msg = await query.message.reply_text(
-        t("audit_started", lang, total=len(emails), concurrency=concurrency, timeout=config.SMTP_TIMEOUT),
+        t("audit_started", lang, total=len(combos), concurrency=concurrency, timeout=config.SMTP_TIMEOUT),
         parse_mode="HTML",
     )
 
     if config.STICKER_PROCESSING:
         await context.bot.send_sticker(uid, config.STICKER_PROCESSING)
 
-    # Launch background audit
     asyncio.create_task(
-        _run_audit(uid, lang, emails, pm, concurrency, progress_msg, session_id, context)
+        _run_audit(uid, lang, combos, pm, concurrency, progress_msg, session_id, context)
     )
-
 
 async def _run_audit(
     uid: int,
     lang: str,
-    emails: list,
+    combos: list,   # قائمة من (email, password)
     pm: ProxyManager,
     concurrency: int,
     progress_msg,
     session_id: int,
     context: ContextTypes.DEFAULT_TYPE,
 ):
-    """Background task that runs the bulk audit and updates Telegram progress."""
+    """Background task that runs the bulk checker and updates Telegram progress."""
     start_time = time.time()
     last_edit = 0
-    final_stats = {}
 
     async def _progress(**kwargs):
         nonlocal last_edit
@@ -559,7 +530,8 @@ async def _run_audit(
                   percent=percent,
                   valid=kwargs["valid"],
                   invalid=kwargs["invalid"],
-                  grey=kwargs["grey"],
+                  locked=kwargs.get("locked", 0),
+                  retry=kwargs.get("retry", 0),
                   timeout=kwargs["timeout"],
                   speed=kwargs["speed"],
                   elapsed=fmt_seconds(kwargs["elapsed"])),
@@ -568,12 +540,11 @@ async def _run_audit(
         except Exception as exc:
             logger.debug(f"Progress edit failed: {exc}")
 
-    auditor = BulkAuditor(pm, concurrency=concurrency, progress_callback=_progress)
-    # Store auditor reference so user can cancel (optional extension)
-    user_data_store.setdefault(uid, {})["auditor"] = auditor
+    checker = BulkChecker(pm, concurrency=concurrency, progress_callback=_progress)
+    user_data_store.setdefault(uid, {})["checker"] = checker
 
     try:
-        results = await auditor.run(emails)
+        results = await checker.run(combos)
     except Exception as exc:
         logger.exception("Audit crashed")
         await progress_msg.edit_text(f"❌ Audit failed: {exc}")
@@ -584,30 +555,33 @@ async def _run_audit(
     # Count results
     valid = sum(1 for r in results if r["status"] == "Valid")
     invalid = sum(1 for r in results if r["status"] == "Invalid")
-    grey = sum(1 for r in results if r["status"] == "Grey-listed/Retry")
+    locked = sum(1 for r in results if r["status"] == "Locked/2FA")
+    retry = sum(1 for r in results if r["status"] == "Retry")
     timeout = sum(1 for r in results if r["status"] == "Timeout")
 
-    await db.update_session_counts(session_id, valid, invalid, grey, timeout)
+    # تحديث قاعدة البيانات (تأكد من إضافة الأعمدة الجديدة في database.py)
+    await db.update_session_counts(session_id, valid, invalid, locked, retry, timeout)
 
-    # Write result file
+    # كتابة ملف النتائج الكامل
     result_path = config.RESULTS_DIR / f"audit_{uid}_{session_id}.txt"
     with open(result_path, "w", encoding="utf-8") as f:
-        f.write("# Email Auditor Pro Results\n")
+        f.write("# Outlook Account Checker Results\n")
         f.write(f"# Generated: {datetime.utcnow().isoformat()}\n")
-        f.write(f"# Total: {len(results)} | Valid: {valid} | Invalid: {invalid} | Grey: {grey} | Timeout: {timeout}\n")
+        f.write(f"# Total: {len(results)} | Valid: {valid} | Invalid: {invalid} | Locked: {locked} | Retry: {retry} | Timeout: {timeout}\n")
         f.write("-" * 60 + "\n")
         for r in results:
-            f.write(f"{r['status']:20} | {r['email']} | MX: {r['mx']} | {r['detail']}\n")
+            f.write(f"{r['status']:15} | {r['email']} | {r['detail'][:40]}\n")
 
     await db.complete_session(session_id, str(result_path))
 
-    # Final message
+    # رسالة الإكمال
     await progress_msg.edit_text(
         t("audit_complete", lang,
           total=len(results),
           valid=valid,
           invalid=invalid,
-          grey=grey,
+          locked=locked,
+          retry=retry,
           timeout=timeout,
           elapsed=fmt_seconds(elapsed)),
         parse_mode="HTML",
@@ -616,12 +590,12 @@ async def _run_audit(
     if config.STICKER_SUCCESS:
         await context.bot.send_sticker(uid, config.STICKER_SUCCESS)
 
-    # Auto-send valid-only file
+    # إرسال ملف النتائج الصالحة (email:pass)
     valid_path = config.RESULTS_DIR / f"valid_{uid}_{session_id}.txt"
     with open(valid_path, "w", encoding="utf-8") as f:
         for r in results:
             if r["status"] == "Valid":
-                f.write(r["email"] + "\n")
+                f.write(f"{r['email']}:{r['password']}\n")
     if valid > 0:
         await context.bot.send_document(
             uid,
@@ -629,7 +603,6 @@ async def _run_audit(
             caption=t("results_ready", lang),
             parse_mode="HTML",
         )
-
 
 # ─── Download Results ───
 async def cb_menu_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -652,7 +625,6 @@ async def cb_menu_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML",
     )
 
-
 # ─── Admin /stats ───
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = _ud(update)
@@ -667,7 +639,6 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Audit Sessions: <b>{stats['sessions']}</b>",
         parse_mode="HTML",
     )
-
 
 # ─── Main ───
 def main():
@@ -704,7 +675,6 @@ def main():
 
     logger.info("Bot started polling...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
-
 
 if __name__ == "__main__":
     main()
